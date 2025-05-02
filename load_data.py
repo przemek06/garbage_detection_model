@@ -96,7 +96,7 @@ def data_generator(image_dir, label_dir, rois_dir, num_classes):
         path = os.path.join(image_dir, fname)
         yield load_data_sample(path, label_dir, rois_dir, num_classes)
 
-def format_sample(sample, max_rois=128):
+def format_sample(sample, max_rois=64):
     img = sample['image']
     img = tf.cast(img, tf.float32)
     
@@ -129,7 +129,7 @@ def format_sample(sample, max_rois=128):
     return (img, padded_coords), (padded_classes, padded_bboxes)
 
 
-def build_tf_dataset(image_dir, label_dir, rois_dir, num_classes, max_rois=128):
+def build_tf_dataset(image_dir, label_dir, rois_dir, num_classes, max_rois=64):
     output_signature = {
         'image': tf.TensorSpec(shape=(None, None, 3), dtype=tf.float32),
         'rois': {

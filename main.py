@@ -12,7 +12,7 @@ from model import FastRCNN
 CLASSES = {0: "Plastic", 1: "Paper", 2: "Glass", 3: "Metal", 4: "Other", 5: "Background"}
 NUM_CLASSES = len(CLASSES)
 EPOCHS = 10
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 
 
 def main():

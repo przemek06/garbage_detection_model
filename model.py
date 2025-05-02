@@ -13,7 +13,8 @@ class FastRCNN(Model):
         self.cls_accuracy_metric = tf.keras.metrics.SparseCategoricalAccuracy(name='cls_accuracy')
     
     def _build_model(self):
-        self.backbone = tf.keras.applications.MobileNetV2(include_top=False, weights='imagenet',input_shape=(None, None, 3))       
+        self.backbone = tf.keras.applications.MobileNetV2(include_top=False, weights='imagenet',input_shape=(None, None, 3))
+        self.conv_reduce = layers.Conv2D(256, (1, 1), activation='relu')       
         self.roi_pooling = layers.MaxPooling2D(pool_size=(7, 7), strides=(1, 1), padding='same')
         self.flatten = layers.Flatten()
         self.fc1 = layers.Dense(512, activation='relu')
@@ -25,6 +26,7 @@ class FastRCNN(Model):
         image, rois = inputs
         
         feature_maps = self.backbone(image, training=training)
+        feature_maps = self.conv_reduce(feature_maps, training=training)
         
         batch_size = tf.shape(image)[0]
         num_rois = tf.shape(rois)[1]
@@ -115,7 +117,5 @@ class FastRCNN(Model):
         self.cls_loss_metric.update_state(cls_loss)
         self.bbox_loss_metric.update_state(bbox_loss)
         self.cls_accuracy_metric.update_state(true_cls, pred_cls)
-
-        print(f"cls_loss: {cls_loss.numpy()}, bbox_loss: {bbox_loss.numpy()}")
         
         return {m.name: m.result() for m in self.metrics}
