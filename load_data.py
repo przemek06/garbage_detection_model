@@ -7,6 +7,7 @@ from selective_search import load_precomputed_rois
 
 def load_data_sample(image_path, label_dir, rois_dir, num_classes):
     image = cv2.imread(image_path)
+    image = cv2.resize(image, (224, 224))
     image = standardize_image(image) 
     filename = os.path.basename(image_path)
     label_path = os.path.join(label_dir, filename.replace('.jpg', '.txt'))
