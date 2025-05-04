@@ -1,5 +1,7 @@
 import tensorflow as tf
 from tensorflow.keras import layers, Model
+from selective_search import get_rois
+from normalize_data import standardize_image
 
 class FastRCNN(Model):
     def __init__(self, classes):
@@ -36,11 +38,12 @@ class FastRCNN(Model):
         rois_scaled = rois * [img_width, img_height, img_width, img_height]
         rois_feature = rois_scaled / 32.0  
         
-        feature_shape = tf.cast(tf.shape(feature_maps)[1:3], tf.float32)  
-        ymin = rois_feature[..., 1] / feature_shape[0]
-        xmin = rois_feature[..., 0] / feature_shape[1]
-        ymax = rois_feature[..., 3] / feature_shape[0]
-        xmax = rois_feature[..., 2] / feature_shape[1]
+        feature_width = tf.cast(tf.shape(feature_maps)[1], tf.float32)
+        feature_height = tf.cast(tf.shape(feature_maps)[2], tf.float32)  
+        ymin = rois_feature[..., 1] / feature_height
+        xmin = rois_feature[..., 0] / feature_width
+        ymax = rois_feature[..., 3] / feature_height
+        xmax = rois_feature[..., 2] / feature_width
         boxes = tf.stack([ymin, xmin, ymax, xmax], axis=-1)
         boxes_flat = tf.reshape(boxes, [-1, 4])
         
@@ -81,7 +84,7 @@ class FastRCNN(Model):
     def train_step(self, data):
         x, y = data
         images, rois = x
-        true_cls, true_bbox = y
+        true_cls, true_bbox = y        
 
         with tf.GradientTape() as tape:
             pred_cls, pred_bbox = self((images, rois), training=True)
@@ -103,11 +106,7 @@ class FastRCNN(Model):
             masked_true_bbox = tf.boolean_mask(true_bbox_flat, mask)
             masked_pred_bbox = tf.boolean_mask(pred_bbox_selected, mask)
             
-            bbox_loss = tf.cond(
-                tf.size(masked_true_bbox) > 0,
-                lambda: self.bbox_loss_fn(masked_true_bbox, masked_pred_bbox),
-                lambda: tf.constant(0.0, dtype=tf.float32)
-            )
+            bbox_loss = self.bbox_loss_fn(masked_true_bbox, masked_pred_bbox)
             
             total_loss = cls_loss + bbox_loss
 
@@ -119,3 +118,32 @@ class FastRCNN(Model):
         self.cls_accuracy_metric.update_state(true_cls, pred_cls)
         
         return {m.name: m.result() for m in self.metrics}
+    
+    def predict(self, image):
+        rois = get_rois(image)
+        image = standardize_image(image)
+        image = tf.expand_dims(image, axis=0)
+        pred_cls, pred_bbox = self((image, rois), training=False)
+        pred_cls = tf.argmax(pred_cls, axis=-1)
+        pred_bbox_flat = tf.reshape(pred_bbox, [-1, self.num_classes, 4])
+        indices = tf.stack([
+                tf.range(tf.shape(pred_cls)[0]), 
+                pred_cls
+            ], axis=1)
+        pred_bbox_selected = tf.gather_nd(pred_bbox_flat, indices)
+
+        return pred_cls, pred_bbox_selected
+    
+    def process_boxes(self, image, boxes):
+        processed_boxes = []
+        
+    
+    def nms(self, class_probabilities, boxes):
+        selected_indices = tf.image.non_max_suppression(
+            boxes,
+            class_probabilities,
+            max_output_size=50,
+            iou_threshold=0.5
+        )
+        return selected_indices
+

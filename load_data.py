@@ -66,7 +66,7 @@ def match_by_iou(instance, num_classes):
             roi['class'] = best_obj['class']
             roi['bbox'] = best_obj['bbox']
         else:
-            roi['class'] = num_classes
+            roi['class'] = num_classes - 1
             roi['bbox'] = roi['roi']
 
 def calculate_iou(roi, bbox):
@@ -97,7 +97,7 @@ def data_generator(image_dir, label_dir, rois_dir, num_classes):
         path = os.path.join(image_dir, fname)
         yield load_data_sample(path, label_dir, rois_dir, num_classes)
 
-def format_sample(sample, max_rois=64):
+def format_sample(sample, max_rois=128):
     img = sample['image']
     img = tf.cast(img, tf.float32)
     
@@ -114,12 +114,12 @@ def format_sample(sample, max_rois=64):
     padded_coords = tf.pad(
         truncated_coords,
         paddings=[[0, max_rois - num_rois], [0, 0]],
-        constant_values=-1.0
+        constant_values=0.0
     )
     padded_classes = tf.pad(
         truncated_classes,
         paddings=[[0, max_rois - num_rois]],
-        constant_values=-1 
+        constant_values=0.0
     )
     padded_bboxes = tf.pad(
         truncated_bboxes,
@@ -127,10 +127,39 @@ def format_sample(sample, max_rois=64):
         constant_values=0.0
     )
     
-    return (img, padded_coords), (padded_classes, padded_bboxes)
+    return (img, padded_coords, padded_classes, padded_bboxes)
+
+def change_bbox_targets_to_offsets(sample):
+    img, padded_coords, padded_classes, padded_bboxes = sample
+
+    def compute_offsets(inputs):
+        coords, bbox = inputs
+        xmin, ymin, xmax, ymax = coords[0], coords[1], coords[2], coords[3]
+        xmin_b, ymin_b, xmax_b, ymax_b = bbox[0], bbox[1], bbox[2], bbox[3]
+
+        w = xmax - xmin
+        h = ymax - ymin
+
+        if w == 0 or h == 0:
+            return tf.zeros(4, dtype=tf.float32)
+
+        dx = (xmin_b - xmin) / w
+        dy = (ymin_b - ymin) / h
+        dw = (xmax_b - xmin_b) / w
+        dh = (ymax_b - ymin_b) / h
+
+        return tf.stack([dx, dy, dw, dh])
+
+    offsets = tf.map_fn(
+        compute_offsets,
+        (padded_coords, padded_bboxes),
+        dtype=tf.float32
+    )
+
+    return (img, padded_coords), (padded_classes, offsets)
 
 
-def build_tf_dataset(image_dir, label_dir, rois_dir, num_classes, max_rois=64):
+def build_tf_dataset(image_dir, label_dir, rois_dir, num_classes, max_rois=128):
     output_signature = {
         'image': tf.TensorSpec(shape=(None, None, 3), dtype=tf.float32),
         'rois': {
@@ -143,10 +172,14 @@ def build_tf_dataset(image_dir, label_dir, rois_dir, num_classes, max_rois=64):
             'bbox': tf.TensorSpec(shape=(None, 4), dtype=tf.float32),
         },
     }
-    return tf.data.Dataset.from_generator(
+    dataset = tf.data.Dataset.from_generator(
         lambda: data_generator(image_dir, label_dir, rois_dir, num_classes),
         output_signature=output_signature
-    ).map(lambda x: format_sample(x, max_rois))
+    )
+    dataset = dataset.map(lambda x: format_sample(x, max_rois), num_parallel_calls=tf.data.AUTOTUNE)
+    dataset = dataset.map(lambda img, coords, classes, bboxes: change_bbox_targets_to_offsets((img, coords, classes, bboxes)), num_parallel_calls=tf.data.AUTOTUNE)
+    
+    return dataset
 
 def load_training_data(num_classes):
     training_data_dir = "./data/split1/train/"

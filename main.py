@@ -11,15 +11,22 @@ from model import FastRCNN
 
 CLASSES = {0: "Plastic", 1: "Paper", 2: "Glass", 3: "Metal", 4: "Other", 5: "Background"}
 NUM_CLASSES = len(CLASSES)
-EPOCHS = 10
+EPOCHS = 1
 BATCH_SIZE = 4
+
+def load_random_image(image_dir):
+    image_files = os.listdir(image_dir)
+    random_image_file = random.choice(image_files)
+    image_path = os.path.join(image_dir, random_image_file)
+    image = cv2.imread(image_path)
+    return image, random_image_file
 
 
 def main():
     model = FastRCNN(CLASSES)
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-        cls_loss_fn=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        cls_loss_fn=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
         bbox_loss_fn=tf.keras.losses.Huber()
     )
 
@@ -33,6 +40,8 @@ def main():
     with open('training_history.txt', 'w') as f:
         for key in history.history.keys():
             f.write(f"{key}: {history.history[key]}\n")
+
+    
 
 if __name__ == "__main__":
     main()
