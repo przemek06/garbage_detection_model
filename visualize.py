@@ -27,10 +27,9 @@ def load_and_draw_bounding_boxes(image_path, txt_path):
     cv2.destroyAllWindows()
 
 def draw_bounding_boxes(image, boxes):
-    height, width, _ = image.shape
     for box in boxes:
         xmin, ymin, xmax, ymax = box
-        xmin, ymin, xmax, ymax = int(xmin * width), int(ymin * height), int(xmax * width), int(ymax * height)
+        xmin, ymin, xmax, ymax = int(xmin), int(ymin), int(xmax), int(ymax)
         cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
     
     cv2.imshow("Image with Bounding Boxes", image)

@@ -152,36 +152,39 @@ class FastRCNN(Model):
         return {m.name: m.result() for m in self.metrics}
     
     def predict(self, image):
-        rois = get_rois(image)
+        rois = tf.expand_dims(tf.convert_to_tensor(get_rois(image)), axis=0)
         image = standardize_image(image)
         image = tf.expand_dims(image, axis=0)
-        pred_classes, pred_offsets = self((image, rois), training=False)
-        pred_classes = tf.argmax(pred_classes, axis=-1)
+        pred_classes_probs, pred_offsets = self((image, rois), training=False)
+        pred_classes = tf.argmax(pred_classes_probs, axis=-1)
+        non_background_indices = tf.where(pred_classes[0] != (self.num_classes - 1))
+        pred_classes_probs = tf.gather(pred_classes_probs[0], non_background_indices)
+        pred_classes = tf.gather(pred_classes[0], non_background_indices)
+        pred_offsets = tf.gather(pred_offsets[0], non_background_indices)
+        rois = tf.gather(rois[0], non_background_indices)
+
         pred_offsets_flat = tf.reshape(pred_offsets, [-1, self.num_classes, 4])
-        indices = tf.stack([
-                tf.range(tf.shape(pred_classes)[0]), 
-                pred_classes
-            ], axis=1)
-        pred_offsets = tf.gather_nd(pred_offsets_flat, indices)
+        indices = pred_classes
+        pred_offsets = tf.gather(pred_offsets_flat, indices, axis=1, batch_dims=1)
         pred_offsets = tf.reshape(pred_offsets, [-1, 4])
 
         processed_boxes = []
-        for i in range(len(rois)):
-            roi = rois[i]
+        for i in range(rois.shape[0]):
+            roi = rois[i][0]
             offsets = pred_offsets[i]
             box = self.process_boxes(image, roi, offsets)
             processed_boxes.append(box)
+        processed_boxes = tf.stack(processed_boxes, axis=0)
+        confidence_scores = tf.squeeze(tf.reduce_max(pred_classes_probs, axis=-1), axis=-1)
 
-        processed_boxes = tf.stack(processed_boxes, axis=0)   
-        selected_idx = self.nms(pred_classes, processed_boxes)
-
-        final_boxes = tf.gather(processed_boxes, selected_idx)
-        final_classes = tf.gather(pred_classes, selected_idx)
+        selected_indices = self.nms(confidence_scores, processed_boxes)
+        final_boxes = tf.gather(processed_boxes, selected_indices)
+        final_classes = tf.gather(pred_classes, selected_indices)
 
         return final_classes, final_boxes
     
     def process_boxes(self, image, roi, offsets):
-        w_im, h_im = tf.cast(tf.shape(image)[1], tf.float32), tf.cast(tf.shape(image)[0], tf.float32)
+        w_im, h_im = tf.cast(tf.shape(image)[1], tf.float32), tf.cast(tf.shape(image)[2], tf.float32)
 
         x_roi, y_roi = roi[0], roi[1]
         w_roi = roi[2] - roi[0]
@@ -189,24 +192,27 @@ class FastRCNN(Model):
 
         dx, dy, dw, dh = offsets[0], offsets[1], offsets[2], offsets[3]
 
-        xmin = (x_roi + dx * w_roi) * w_im
-        ymin = (y_roi + dy * h_roi) * h_im
-        xmax = (xmin + dw * w_roi) * w_im
-        ymax = (ymin + dh * h_roi) * h_im
+        x_roi, y_roi, w_roi, h_roi = tf.cast(x_roi, tf.float32), tf.cast(y_roi, tf.float32), tf.cast(w_roi, tf.float32), tf.cast(h_roi, tf.float32)
+
+        xmin = (x_roi - dx * w_roi) * w_im
+        ymin = (y_roi - dy * h_roi) * h_im
+        xmax = (xmin - dw * w_roi) * w_im
+        ymax = (ymin - dh * h_roi) * h_im
 
         x_min = tf.clip_by_value(xmin, 0, w_im - 1)
         y_min = tf.clip_by_value(ymin, 0, h_im - 1)
         x_max = tf.clip_by_value(xmax, 0, w_im - 1)
         y_max = tf.clip_by_value(ymax, 0, h_im - 1)
 
+
         return tf.stack([x_min, y_min, x_max, y_max], axis=-1)
         
     
-    def nms(self, class_probabilities, boxes):
+    def nms(self, confidence_scores, boxes):
         selected_indices = tf.image.non_max_suppression(
             boxes,
-            class_probabilities,
-            max_output_size=50,
+            confidence_scores,
+            max_output_size=10,
             iou_threshold=0.5
         )
         return selected_indices

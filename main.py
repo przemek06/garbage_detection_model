@@ -11,7 +11,7 @@ from model import FastRCNN
 
 CLASSES = {0: "Plastic", 1: "Paper", 2: "Glass", 3: "Metal", 4: "Other", 5: "Background"}
 NUM_CLASSES = len(CLASSES)
-EPOCHS = 10
+EPOCHS = 30
 BATCH_SIZE = 8
 CHECKPOINT_PATH = "best_fast_rcnn_model.ckpt"
 
@@ -55,20 +55,21 @@ def train():
 
 def test():
     model = FastRCNN(CLASSES)
-    model.load_weights(CHECKPOINT_PATH)
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
         cls_loss_fn=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
         bbox_loss_fn=tf.keras.losses.Huber()
     )
+    model.load_weights(CHECKPOINT_PATH)
     image = load_random_image("./data/split1/test/images")
     final_classes, final_boxes = model.predict(image)
-    print("Predicted classes:", final_classes)
-    print("Predicted boxes:", final_boxes)
+    for cls in final_classes:
+        cls_name = CLASSES[int(cls.numpy()[0])]
+        print(f"Predicted class: {cls_name}")
     draw_bounding_boxes(image, final_boxes)
 
 def main():
-    test()
+    train()
 
 if __name__ == "__main__":
     main()
