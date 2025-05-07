@@ -71,6 +71,38 @@ class FastRCNN(Model):
         
         return (cls_out, bbox_out)
     
+    def test_step(self, data):
+        x, y = data
+        images, rois = x
+        true_cls, true_bbox = y
+
+        pred_cls, pred_bbox = self((images, rois), training=False)
+
+        cls_loss = self.cls_loss_fn(true_cls, pred_cls)
+
+        true_cls_flat = tf.reshape(true_cls, [-1])
+        true_bbox_flat = tf.reshape(true_bbox, [-1, 4])
+        pred_bbox_flat = tf.reshape(pred_bbox, [-1, self.num_classes, 4])
+
+        indices = tf.stack([
+            tf.range(tf.shape(true_cls_flat)[0]), 
+            true_cls_flat
+        ], axis=1)
+
+        pred_bbox_selected = tf.gather_nd(pred_bbox_flat, indices)
+
+        mask = true_cls_flat != (self.num_classes - 1)
+        masked_true_bbox = tf.boolean_mask(true_bbox_flat, mask)
+        masked_pred_bbox = tf.boolean_mask(pred_bbox_selected, mask)
+
+        bbox_loss = self.bbox_loss_fn(masked_true_bbox, masked_pred_bbox)
+
+        self.cls_loss_metric.update_state(cls_loss)
+        self.bbox_loss_metric.update_state(bbox_loss)
+        self.cls_accuracy_metric.update_state(true_cls, pred_cls)
+
+        return {m.name: m.result() for m in self.metrics}
+    
     @property
     def metrics(self):
         return [self.cls_loss_metric, self.bbox_loss_metric, self.cls_accuracy_metric]
@@ -123,19 +155,51 @@ class FastRCNN(Model):
         rois = get_rois(image)
         image = standardize_image(image)
         image = tf.expand_dims(image, axis=0)
-        pred_cls, pred_bbox = self((image, rois), training=False)
-        pred_cls = tf.argmax(pred_cls, axis=-1)
-        pred_bbox_flat = tf.reshape(pred_bbox, [-1, self.num_classes, 4])
+        pred_classes, pred_offsets = self((image, rois), training=False)
+        pred_classes = tf.argmax(pred_classes, axis=-1)
+        pred_offsets_flat = tf.reshape(pred_offsets, [-1, self.num_classes, 4])
         indices = tf.stack([
-                tf.range(tf.shape(pred_cls)[0]), 
-                pred_cls
+                tf.range(tf.shape(pred_classes)[0]), 
+                pred_classes
             ], axis=1)
-        pred_bbox_selected = tf.gather_nd(pred_bbox_flat, indices)
+        pred_offsets = tf.gather_nd(pred_offsets_flat, indices)
+        pred_offsets = tf.reshape(pred_offsets, [-1, 4])
 
-        return pred_cls, pred_bbox_selected
-    
-    def process_boxes(self, image, boxes):
         processed_boxes = []
+        for i in range(len(rois)):
+            roi = rois[i]
+            offsets = pred_offsets[i]
+            box = self.process_boxes(image, roi, offsets)
+            processed_boxes.append(box)
+
+        processed_boxes = tf.stack(processed_boxes, axis=0)   
+        selected_idx = self.nms(pred_classes, processed_boxes)
+
+        final_boxes = tf.gather(processed_boxes, selected_idx)
+        final_classes = tf.gather(pred_classes, selected_idx)
+
+        return final_classes, final_boxes
+    
+    def process_boxes(self, image, roi, offsets):
+        w_im, h_im = tf.cast(tf.shape(image)[1], tf.float32), tf.cast(tf.shape(image)[0], tf.float32)
+
+        x_roi, y_roi = roi[0], roi[1]
+        w_roi = roi[2] - roi[0]
+        h_roi = roi[3] - roi[1]
+
+        dx, dy, dw, dh = offsets[0], offsets[1], offsets[2], offsets[3]
+
+        xmin = (x_roi + dx * w_roi) * w_im
+        ymin = (y_roi + dy * h_roi) * h_im
+        xmax = (xmin + dw * w_roi) * w_im
+        ymax = (ymin + dh * h_roi) * h_im
+
+        x_min = tf.clip_by_value(xmin, 0, w_im - 1)
+        y_min = tf.clip_by_value(ymin, 0, h_im - 1)
+        x_max = tf.clip_by_value(xmax, 0, w_im - 1)
+        y_max = tf.clip_by_value(ymax, 0, h_im - 1)
+
+        return tf.stack([x_min, y_min, x_max, y_max], axis=-1)
         
     
     def nms(self, class_probabilities, boxes):
