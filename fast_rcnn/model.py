@@ -8,6 +8,8 @@ class FastRCNN(Model):
         super(FastRCNN, self).__init__()
         self.classes = classes
         self.num_classes = len(classes)
+        self._bg_weight = 0.3
+        self._fg_weight = 1.0
         self._build_model()
         
         self.cls_loss_metric = tf.keras.metrics.Mean(name='cls_loss')
@@ -17,10 +19,10 @@ class FastRCNN(Model):
     def _build_model(self):
         self.backbone = tf.keras.applications.MobileNetV2(include_top=False, weights='imagenet',input_shape=(None, None, 3))
         self.conv_reduce = layers.Conv2D(256, (1, 1), activation='relu')       
-        self.roi_pooling = layers.MaxPooling2D(pool_size=(7, 7), strides=(1, 1), padding='same')
+        self.roi_pooling = layers.MaxPooling2D(pool_size=(2, 2), strides=(2, 2), padding='same')
         self.flatten = layers.Flatten()
-        self.fc1 = layers.Dense(512, activation='relu')
-        self.fc2 = layers.Dense(256, activation='relu')
+        self.fc1 = layers.Dense(256, activation='relu', kernel_regularizer='l2')
+        self.fc2 = layers.Dense(128, activation='relu', kernel_regularizer='l2')
         self.cls_output = layers.Dense(self.num_classes, activation='softmax', name='cls_output')
         self.bbox_output = layers.Dense(self.num_classes * 4, name='bbox_output')
             
@@ -36,7 +38,8 @@ class FastRCNN(Model):
         img_width = tf.cast(tf.shape(image)[2], tf.float32)
         
         rois_scaled = rois * [img_width, img_height, img_width, img_height]
-        rois_feature = rois_scaled / 32.0  
+        downscale = img_height / tf.cast(tf.shape(feature_maps)[1], tf.float32)
+        rois_feature = rois_scaled / downscale
         
         feature_width = tf.cast(tf.shape(feature_maps)[1], tf.float32)
         feature_height = tf.cast(tf.shape(feature_maps)[2], tf.float32)  
@@ -74,11 +77,11 @@ class FastRCNN(Model):
     def test_step(self, data):
         x, y = data
         images, rois = x
-        true_cls, true_bbox = y
+        true_cls, true_bbox, valid_mask = y
 
         pred_cls, pred_bbox = self((images, rois), training=False)
 
-        cls_loss = self.cls_loss_fn(true_cls, pred_cls)
+        cls_loss = self._weighted_cls_loss(true_cls, pred_cls)
 
         true_cls_flat = tf.reshape(true_cls, [-1])
         true_bbox_flat = tf.reshape(true_bbox, [-1, 4])
@@ -112,20 +115,28 @@ class FastRCNN(Model):
         self.optimizer = optimizer
         self.cls_loss_fn = cls_loss_fn
         self.bbox_loss_fn = bbox_loss_fn
+
+    def _weighted_cls_loss(self, true_cls, pred_cls):
+        return self.cls_loss_fn(true_cls, pred_cls)  
+        
     
     def train_step(self, data):
         x, y = data
         images, rois = x
-        true_cls, true_bbox = y        
+        true_cls, true_bbox, valid_mask = y     
 
         with tf.GradientTape() as tape:
             pred_cls, pred_bbox = self((images, rois), training=True)
             
-            cls_loss = self.cls_loss_fn(true_cls, pred_cls)
+            cls_loss = self.cls_loss_fn(
+                true_cls, pred_cls,
+                sample_weight=valid_mask 
+            )
             
             true_cls_flat = tf.reshape(true_cls, [-1])
             true_bbox_flat = tf.reshape(true_bbox, [-1, 4])
             pred_bbox_flat = tf.reshape(pred_bbox, [-1, self.num_classes, 4])
+            valid_flat = tf.reshape(valid_mask, [-1])
             
             indices = tf.stack([
                 tf.range(tf.shape(true_cls_flat)[0]), 
@@ -135,6 +146,7 @@ class FastRCNN(Model):
             pred_bbox_selected = tf.gather_nd(pred_bbox_flat, indices)
             
             mask = true_cls_flat != (self.num_classes - 1)
+            mask = tf.logical_and(mask, valid_flat)
             masked_true_bbox = tf.boolean_mask(true_bbox_flat, mask)
             masked_pred_bbox = tf.boolean_mask(pred_bbox_selected, mask)
             
@@ -153,7 +165,7 @@ class FastRCNN(Model):
     
     def predict(self, image):
         rois = tf.expand_dims(tf.convert_to_tensor(get_rois(image)), axis=0)
-        image = standardize_image(image)
+        image = tf.keras.applications.mobilenet_v2.preprocess_input(image)
         image = tf.expand_dims(image, axis=0)
         pred_classes_probs, pred_offsets = self((image, rois), training=False)
         pred_classes = tf.argmax(pred_classes_probs, axis=-1)
@@ -196,8 +208,8 @@ class FastRCNN(Model):
 
         xmin = (x_roi - dx * w_roi) * w_im
         ymin = (y_roi - dy * h_roi) * h_im
-        xmax = (xmin - dw * w_roi) * w_im
-        ymax = (ymin - dh * h_roi) * h_im
+        xmax = (xmin + dw * w_roi) * w_im
+        ymax = (ymin + dh * h_roi) * h_im
 
         x_min = tf.clip_by_value(xmin, 0, w_im - 1)
         y_min = tf.clip_by_value(ymin, 0, h_im - 1)

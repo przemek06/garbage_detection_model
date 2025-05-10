@@ -1,2 +1,9 @@
 venv
 data
+weights
+checkpoint
+best_fast_rcnn_model.ckpt.index
+best_fast_rcnn_model.ckpt.data-00000-of-00001
+training_history.txt
+yolo/runs/
+__pycache__

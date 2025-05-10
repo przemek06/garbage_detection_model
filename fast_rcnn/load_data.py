@@ -4,11 +4,13 @@ import cv2
 import numpy as np
 import tensorflow as tf
 from selective_search import load_precomputed_rois
+import tensorflow as tf
 
 def load_data_sample(image_path, label_dir, rois_dir, num_classes):
     image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image = cv2.resize(image, (224, 224))
-    image = standardize_image(image) 
+    image = tf.keras.applications.mobilenet_v2.preprocess_input(image)
     filename = os.path.basename(image_path)
     label_path = os.path.join(label_dir, filename.replace('.jpg', '.txt'))
     objects = []
@@ -26,6 +28,7 @@ def load_data_sample(image_path, label_dir, rois_dir, num_classes):
     
     sample = {'image': image, 'objects': objects, 'rois': rois}
     match_by_iou(sample, num_classes)
+    sample = filter_background(sample, num_classes - 1)
 
     if sample['objects']:
         obj_classes = np.array([obj['class'] for obj in sample['objects']], dtype=np.int32)
@@ -65,9 +68,22 @@ def match_by_iou(instance, num_classes):
         if best_obj is not None and best_iou > 0.5:
             roi['class'] = best_obj['class']
             roi['bbox'] = best_obj['bbox']
+            roi['is_positive'] = True
         else:
             roi['class'] = num_classes - 1
             roi['bbox'] = roi['roi']
+            roi['is_positive'] = False
+
+def filter_background(sample, background_class):
+    filtered_rois = []
+    for roi in sample['rois']:
+        if roi['class'] != background_class:
+            filtered_rois.append(roi)
+        elif np.random.rand() < 0.03:
+            filtered_rois.append(roi)
+    sample['rois'] = filtered_rois
+    return sample
+
 
 def calculate_iou(roi, bbox):
     xA = max(roi[0], bbox[0])
@@ -97,19 +113,27 @@ def data_generator(image_dir, label_dir, rois_dir, num_classes):
         path = os.path.join(image_dir, fname)
         yield load_data_sample(path, label_dir, rois_dir, num_classes)
 
-def format_sample(sample, max_rois=128):
+def format_sample(sample, max_rois=32):
     img = sample['image']
     img = tf.cast(img, tf.float32)
     
     roi_coords = sample['rois']['roi']  
     roi_classes = sample['rois']['class']  
     roi_bboxes = sample['rois']['bbox'] 
-    
-    truncated_coords = roi_coords[:max_rois]
-    truncated_classes = roi_classes[:max_rois]
-    truncated_bboxes = roi_bboxes[:max_rois]
+    num_rois = tf.shape(roi_coords)[0]
+    shuffled_indices = tf.random.shuffle(tf.range(num_rois))
+    selected_indices = shuffled_indices[:tf.minimum(max_rois, num_rois)]
+
+    truncated_coords = tf.gather(roi_coords, selected_indices)
+    truncated_classes = tf.gather(roi_classes, selected_indices)
+    truncated_bboxes = tf.gather(roi_bboxes, selected_indices)
     
     num_rois = tf.shape(truncated_coords)[0]
+
+    valid_mask = tf.concat([
+        tf.ones(num_rois,  dtype=tf.bool),
+        tf.zeros(max_rois - num_rois, dtype=tf.bool)
+    ], axis=0)
     
     padded_coords = tf.pad(
         truncated_coords,
@@ -119,7 +143,7 @@ def format_sample(sample, max_rois=128):
     padded_classes = tf.pad(
         truncated_classes,
         paddings=[[0, max_rois - num_rois]],
-        constant_values=0.0
+        constant_values=5
     )
     padded_bboxes = tf.pad(
         truncated_bboxes,
@@ -127,10 +151,10 @@ def format_sample(sample, max_rois=128):
         constant_values=0.0
     )
     
-    return (img, padded_coords, padded_classes, padded_bboxes)
+    return (img, padded_coords, padded_classes, padded_bboxes, valid_mask)
 
 def change_bbox_targets_to_offsets(sample):
-    img, padded_coords, padded_classes, padded_bboxes = sample
+    img, padded_coords, padded_classes, padded_bboxes, valid_mask = sample
 
     def compute_offsets(inputs):
         coords, bbox = inputs
@@ -156,10 +180,10 @@ def change_bbox_targets_to_offsets(sample):
         dtype=tf.float32
     )
 
-    return (img, padded_coords), (padded_classes, offsets)
+    return (img, padded_coords), (padded_classes, offsets, valid_mask)
 
 
-def build_tf_dataset(image_dir, label_dir, rois_dir, num_classes, max_rois=128):
+def build_tf_dataset(image_dir, label_dir, rois_dir, num_classes, max_rois=32):
     output_signature = {
         'image': tf.TensorSpec(shape=(None, None, 3), dtype=tf.float32),
         'rois': {
@@ -177,7 +201,7 @@ def build_tf_dataset(image_dir, label_dir, rois_dir, num_classes, max_rois=128):
         output_signature=output_signature
     )
     dataset = dataset.map(lambda x: format_sample(x, max_rois), num_parallel_calls=tf.data.AUTOTUNE)
-    dataset = dataset.map(lambda img, coords, classes, bboxes: change_bbox_targets_to_offsets((img, coords, classes, bboxes)), num_parallel_calls=tf.data.AUTOTUNE)
+    dataset = dataset.map(lambda img, coords, classes, bboxes, valid_mask: change_bbox_targets_to_offsets((img, coords, classes, bboxes, valid_mask)), num_parallel_calls=tf.data.AUTOTUNE)
     
     return dataset
 
