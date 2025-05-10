@@ -7,3 +7,5 @@ best_fast_rcnn_model.ckpt.data-00000-of-00001
 training_history.txt
 yolo/runs/
 __pycache__
+*.pt
+*.csv

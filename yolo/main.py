@@ -3,7 +3,7 @@ import utils
 from predict import test
 
 def main():
-    test()
+    train()
 
 if __name__ == "__main__":
     main()

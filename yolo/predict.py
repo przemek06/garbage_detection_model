@@ -8,9 +8,6 @@ from utils import load_random_image, map_to_aabb, draw_bounding_boxes
 VAL_IMAGE_DIR = "../data/split1/val/images"
 DATA_FILE = 'mydata.yml'
 IMG_SIZE = 416
-BATCH_SIZE = 32
-EPOCHS = 1
-SAVE_PATH = "yolo_trained.pt"
 CLASSES = {0: "Plastic", 1: "Paper", 2: "Glass", 3: "Metal", 4: "Other"}
 BEST_MODEL_PATH = "runs/detect/my_yolov8_model/weights/best.pt"
 
