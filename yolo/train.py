@@ -9,7 +9,7 @@ import os
 DATA_FILE = 'mydata.yml'
 IMG_SIZE = 416
 BATCH_SIZE = 32
-EPOCHS = 30
+EPOCHS = 100
 WEIGHTS_DIR = './epoch_weights'
 METRICS_FILE = 'train_metrics.csv'
 
@@ -40,7 +40,7 @@ def train():
 
     evaluate_on_train(device)
 
-def evaluate_on_train(device):
+def evaluate_on_train(device = torch.device("cuda:0")):
     for fname in sorted(os.listdir(WEIGHTS_DIR)):
         if fname.endswith('.pt'):
             epoch = int(fname.split('_')[1].split('.')[0])
@@ -48,7 +48,8 @@ def evaluate_on_train(device):
             ckpt_path = os.path.join(WEIGHTS_DIR, fname)
             print(f"Evaluating epoch {epoch} with checkpoint {ckpt_path}")
             model_ckpt = YOLO(ckpt_path)
-            model_ckpt.to(device)
+            if device is not None:
+                model_ckpt.to(device)
 
             out = model_ckpt.val(
                 data=DATA_FILE,

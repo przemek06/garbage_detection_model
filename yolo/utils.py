@@ -5,13 +5,6 @@ import torch
 import cv2
 import random
 
-AABB_TRAIN_LABELS_DIR = "../data/split1/train/aabb"
-AABB_VAL_LABELS_DIR = "../data/split1/val/aabb"
-AABB_TEST_LABELS_DIR = "../data/split1/test/aabb"
-YOLO_TRAIN_LABELS_DIR = "../data/split1/train/labels"
-YOLO_VAL_LABELS_DIR = "../data/split1/val/labels"
-YOLO_TEST_LABELS_DIR = "../data/split1/test/labels"
-
 
 def map_to_yolo(cls, xmin, ymin, xmax, ymax):
     x_center = (xmin + xmax) / 2

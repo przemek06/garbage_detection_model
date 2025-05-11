@@ -9,3 +9,4 @@ yolo/runs/
 __pycache__
 *.pt
 *.csv
+graphs
